@@ -1,41 +1,9 @@
 use std::fs;
 use toml::Value;
-use reqwest::blocking::get;
 use semver::Version;
-use serde_json;
+use indexmap::IndexMap;
 
-fn read_pyproject_toml(file_path: &str) -> Result<Value, Box<dyn std::error::Error>> {
-    let content = fs::read_to_string(file_path)?;
-    let value = content.parse::<Value>()?;
-    Ok(value)
-}
-
-fn extract_package_name(dep_str: &str) -> &str {
-    dep_str.split(&['=', '>', '<', '~', '!'][..])
-        .next()
-        .unwrap_or(dep_str)
-        .trim()
-}
-
-fn find_latest_version(dependency: &str) -> Result<Version, Box<dyn std::error::Error>> {
-    let package_name = extract_package_name(dependency);
-    let url = format!("https://pypi.python.org/pypi/{}/json", package_name);
-    let response = get(&url)?.json::<serde_json::Value>()?;
-
-    // Get the releases object from the JSON response
-    let releases = response.get("releases")
-        .ok_or_else(|| "No releases found in PyPI response")?;
-
-    // Find the latest version by comparing all release versions
-    let latest_version = releases.as_object()
-        .ok_or_else(|| "Releases is not an object")?
-        .keys()
-        .filter_map(|v| Version::parse(v).ok())
-        .max()
-        .ok_or_else(|| "No valid versions found")?;
-
-    Ok(latest_version)
-}
+mod project;
 
 fn upgrade_dependencies(project: &mut Value) -> Result<(), Box<dyn std::error::Error>> {
     let dependencies = project.get_mut("project")
@@ -46,19 +14,23 @@ fn upgrade_dependencies(project: &mut Value) -> Result<(), Box<dyn std::error::E
         Value::Array(deps) => {
             for dep in deps.iter_mut() {
                 if let Some(dep_str) = dep.as_str() {
-                    let package_name = extract_package_name(dep_str);
+                    let package_name = project::extract_package_name(dep_str);
                     println!("Upgrading dependency: {}", package_name);
-                    let latest_version = find_latest_version(dep_str)?;
+                    let latest_version = project::find_latest_version(dep_str)?;
                     *dep = Value::String(format!("{}=={}", package_name, latest_version));
                 }
             }
         },
         Value::Table(deps) => {
-            for (name, version) in deps.iter_mut() {
+            // Convert to IndexMap to preserve order
+            let mut index_map: IndexMap<String, Value> = deps.clone().into_iter().collect();
+            for (name, version) in index_map.iter_mut() {
                 println!("Upgrading dependency: {}", name);
-                let latest_version = find_latest_version(name)?;
+                let latest_version = project::find_latest_version(name)?;
                 *version = Value::String(format!("=={}", latest_version));
             }
+            // Repopulate the original table with the updated IndexMap
+            *deps = index_map.into_iter().collect();
         },
         _ => return Err("Dependencies must be an array or table".into()),
     }
@@ -67,7 +39,7 @@ fn upgrade_dependencies(project: &mut Value) -> Result<(), Box<dyn std::error::E
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pyproject_path = "pyproject.toml";
-    let mut pyproject = read_pyproject_toml(pyproject_path)?;
+    let mut pyproject = project::read_pyproject_toml(pyproject_path)?;
 
     upgrade_dependencies(&mut pyproject)?;
 
