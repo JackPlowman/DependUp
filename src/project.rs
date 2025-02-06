@@ -4,12 +4,6 @@ use reqwest::blocking::get;
 use semver::Version;
 use serde_json;
 
-pub fn read_pyproject_toml(file_path: &str) -> Result<Value, Box<dyn std::error::Error>> {
-    let content = fs::read_to_string(file_path)?;
-    let value = content.parse::<Value>()?;
-    Ok(value)
-}
-
 pub fn extract_package_name(dep_str: &str) -> &str {
     dep_str.split(&['=', '>', '<', '~', '!'][..])
         .next()

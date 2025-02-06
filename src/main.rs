@@ -1,7 +1,5 @@
 use std::fs;
-use std::io::{self, BufRead, BufReader, Write};
-use toml::Value;
-use semver::Version;
+use std::io::{BufRead, BufReader, Write};
 use indexmap::IndexMap;
 
 mod project;
