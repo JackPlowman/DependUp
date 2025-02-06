@@ -1,51 +1,74 @@
 use std::fs;
+use std::io::{self, BufRead, BufReader, Write};
 use toml::Value;
 use semver::Version;
 use indexmap::IndexMap;
 
 mod project;
 
-fn upgrade_dependencies(project: &mut Value) -> Result<(), Box<dyn std::error::Error>> {
-    let dependencies = project.get_mut("project")
-        .and_then(|p| p.get_mut("dependencies"))
-        .ok_or("No project.dependencies found")?;
+fn upgrade_dependencies(pyproject_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let file = fs::File::open(pyproject_path)?;
+    let reader = BufReader::new(file);
 
-    match dependencies {
-        Value::Array(deps) => {
-            for dep in deps.iter_mut() {
-                if let Some(dep_str) = dep.as_str() {
-                    let package_name = project::extract_package_name(dep_str);
-                    println!("Upgrading dependency: {}", package_name);
-                    let latest_version = project::find_latest_version(dep_str)?;
-                    *dep = Value::String(format!("{}=={}", package_name, latest_version));
-                }
+    let mut lines = reader.lines().collect::<Result<Vec<_>, _>>()?;
+    let mut in_dependencies_section = false;
+    let mut dependencies: IndexMap<String, String> = IndexMap::new();
+
+    // First, extract dependencies and their original order
+    let mut start_index = None;
+    let mut end_index = None;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim() == "[project.dependencies]" {
+            in_dependencies_section = true;
+            start_index = Some(i);
+            continue;
+        }
+
+        if in_dependencies_section {
+            if line.trim().is_empty() || line.starts_with('[') {
+                in_dependencies_section = false;
+                end_index = Some(i);
+                break;
             }
-        },
-        Value::Table(deps) => {
-            // Convert to IndexMap to preserve order
-            let mut index_map: IndexMap<String, Value> = deps.clone().into_iter().collect();
-            for (name, version) in index_map.iter_mut() {
-                println!("Upgrading dependency: {}", name);
-                let latest_version = project::find_latest_version(name)?;
-                *version = Value::String(format!("=={}", latest_version));
+
+            if let Some((name, version)) = line.split_once("==") {
+                dependencies.insert(name.trim().to_string(), version.trim().to_string());
             }
-            // Repopulate the original table with the updated IndexMap
-            *deps = index_map.into_iter().collect();
-        },
-        _ => return Err("Dependencies must be an array or table".into()),
+        }
     }
+
+    // Upgrade versions
+    let mut upgraded_dependencies: IndexMap<String, String> = IndexMap::new();
+    for (name, _) in dependencies.iter() {
+        println!("Upgrading dependency: {}", name);
+        let latest_version = project::find_latest_version(name)?;
+        upgraded_dependencies.insert(name.clone(), format!("=={}", latest_version));
+    }
+
+    // Modify the lines in memory
+    if let (Some(start), Some(end)) = (start_index, end_index) {
+        let mut insert_index = start + 1;
+        for (name, version) in upgraded_dependencies.iter() {
+            lines[insert_index] = format!("{} {}", name, version);
+            insert_index += 1;
+        }
+        // Remove old dependency lines
+        lines.splice(start + 1..end, upgraded_dependencies.iter().map(|(name, version)| format!("{} {}", name, version)));
+    }
+
+    // Write back to file
+    let mut file = fs::File::create(pyproject_path)?;
+    for line in lines {
+        writeln!(file, "{}", line)?;
+    }
+
+    println!("Updated pyproject.toml successfully");
     Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pyproject_path = "pyproject.toml";
-    let mut pyproject = project::read_pyproject_toml(pyproject_path)?;
-
-    upgrade_dependencies(&mut pyproject)?;
-
-    // Write back to file
-    fs::write(pyproject_path, toml::to_string(&pyproject)?)?;
-    println!("Updated pyproject.toml successfully");
+    upgrade_dependencies(pyproject_path)?;
 
     Ok(())
 }
