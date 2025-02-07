@@ -7,3 +7,6 @@
   - [Status](#status)
 
 ## Status
+
+> [!WARNING]
+> This project has been terminated and is no longer under development/maintenance.
